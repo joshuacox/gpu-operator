@@ -32,11 +32,11 @@ if [[ -z $1 ]]; then
 elif [[ $1 == 'local' ]]; then
 :  ${TARGET_CHART:="${PROJECT_DIR}/deployments/gpu-operator"}
 :  ${TARGET_ACTION:="upgrade -i"}
-:  ${XTRA_OPTS:=" "}
+:  ${XTRA_OPTS:="--wait"}
 elif [[ $1 == 'release' ]]; then
 :  ${TARGET_CHART:="nvidia/gpu-operator"}
 :  ${TARGET_ACTION:="upgrade -i"}
-:  ${XTRA_OPTS:=" "}
+:  ${XTRA_OPTS:="--wait"}
 elif [[ $1 == 'template' ]]; then
 :  ${TARGET_CHART:="${PROJECT_DIR}/deployments/gpu-operator"}
 :  ${TARGET_ACTION:="template"}
@@ -56,9 +56,9 @@ set -o pipefail
 #kubectl label node "${KIND_CLUSTER_NAME}-worker" --overwrite nvidia.com/gpu.present=true
 
 helm ${TARGET_ACTION} \
-  --wait \
   --set driver.enabled=false \
   --set toolkit.enabled=true \
+  --set gdrcopy.enabled=true \
   --set validator.driver.env[0].name="DISABLE_DEV_CHAR_SYMLINK_CREATION" \
   --set-string validator.driver.env[0].value="true" \
   --namespace gpu-operator --create-namespace \
@@ -70,6 +70,6 @@ helm ${TARGET_ACTION} \
 
 set +x
 printf '\033[0;32m'
-echo "Operator installation complete:"
+echo "$TARGET_ACTION complete:"
 kubectl get pod -n gpu-operator
 printf '\033[0m'

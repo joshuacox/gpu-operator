@@ -22,6 +22,14 @@ set -o pipefail
 
 source "${CURRENT_DIR}/scripts/common.sh"
 
+add_repo () {
+  REPO_COUNT=$(helm repo list|grep nvidia|wc -l)
+  if [[ ${REPO_COUNT} < 1 ]]; then
+    helm repo add nvidia https://helm.ngc.nvidia.com/nvidia
+    helm repo update
+  fi
+}
+
 clear_old_cluster () {
   NUM=$(kind get clusters|grep "${KIND_CLUSTER_NAME}" | wc -l)
   if [[ ${NUM} == 1 ]]; then
@@ -37,6 +45,7 @@ clear_old_cluster () {
 
 create_cluster () {
   clear_old_cluster
+  add_repo
   ./create-cluster.sh
 }
 
@@ -59,7 +68,8 @@ exec_bare () {
 waiter () {
   TARGET_NAMESPACE=$1
   TARGET=$2
-  kubectl wait --timeout=120s --for=condition=ready pod -n ${TARGET_NAMESPACE} ${TARGET}
+  extracted_TARGET=$(kubectl get po -n ${TARGET_NAMESPACE}|grep ${TARGET}|awk '{print $1}')
+  kubectl wait --timeout=120s --for=condition=ready pod -n ${TARGET_NAMESPACE} ${extracted_TARGET}
 }
 
 usage () {
@@ -81,8 +91,8 @@ demo () {
     echo 'unrecognized option'
     usage
   fi
-  waiter gpu-operator "$(kubectl get po -n gpu-operator|grep nvidia-container-toolkit-daemonset|awk '{print $1}')"
-  waiter gpu-operator "$(kubectl get po -n gpu-operator|grep nvidia-device-plugin-daemonset|awk '{print $1}')"
+  waiter gpu-operator "nvidia-container-toolkit-daemonset"
+  waiter gpu-operator "nvidia-device-plugin-daemonset"
   kubectl apply -f gpu-pod.yml
   sleep 3
   kubectl get pod gpu-pod
