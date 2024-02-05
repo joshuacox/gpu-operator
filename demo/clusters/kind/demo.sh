@@ -54,6 +54,11 @@ exec_local () {
   ./install-operator.sh local
 }
 
+exec_gdrcopy () {
+  create_cluster
+  ./install-operator.sh gdrcopy
+}
+
 exec_release () {
   create_cluster
   ./install-operator.sh release
@@ -85,6 +90,8 @@ demo () {
     exec_release
   elif [[ $1 == 'local' ]]; then
     exec_local
+  elif [[ $1 == 'gdrcopy' ]]; then
+    exec_gdrcopy
   elif [[ $1 == 'bare' ]]; then
     exec_bare
   else

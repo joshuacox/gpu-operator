@@ -18,7 +18,7 @@
 usage () {
   echo 'USAGE:'
   echo './install-operator.sh [option]'
-  echo 'where [option] is one of local, release, template, template-release'
+  echo 'where [option] is one of local, gdrcopy, release, template, template-release'
   exit 1
 }
 
@@ -33,6 +33,10 @@ elif [[ $1 == 'local' ]]; then
 :  ${TARGET_CHART:="${PROJECT_DIR}/deployments/gpu-operator"}
 :  ${TARGET_ACTION:="upgrade -i"}
 :  ${XTRA_OPTS:="--wait"}
+elif [[ $1 == 'gdrcopy' ]]; then
+:  ${TARGET_CHART:="${PROJECT_DIR}/deployments/gpu-operator"}
+:  ${TARGET_ACTION:="upgrade -i"}
+:  ${XTRA_OPTS:="--wait --set gdrcopy.enabled=true"}
 elif [[ $1 == 'release' ]]; then
 :  ${TARGET_CHART:="nvidia/gpu-operator"}
 :  ${TARGET_ACTION:="upgrade -i"}
@@ -58,7 +62,6 @@ set -o pipefail
 helm ${TARGET_ACTION} \
   --set driver.enabled=false \
   --set toolkit.enabled=true \
-  --set gdrcopy.enabled=true \
   --set validator.driver.env[0].name="DISABLE_DEV_CHAR_SYMLINK_CREATION" \
   --set-string validator.driver.env[0].value="true" \
   --namespace gpu-operator --create-namespace \
