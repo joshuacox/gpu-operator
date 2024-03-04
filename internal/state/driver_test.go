@@ -436,6 +436,15 @@ func TestDriverAdditionalConfigs(t *testing.T) {
 				MountPath: "/opt/config/test-file",
 				SubPath:   "test-file",
 			},
+			{
+				Name:      "test-host-path",
+				MountPath: "/opt/config/test-host-path",
+			},
+			{
+				Name:      "test-host-path-ro",
+				MountPath: "/opt/config/test-host-path-ro",
+				ReadOnly:  true,
+			},
 		},
 		Volumes: []corev1.Volume{
 			{
@@ -451,6 +460,24 @@ func TestDriverAdditionalConfigs(t *testing.T) {
 								Path: "test-file",
 							},
 						},
+					},
+				},
+			},
+			{
+				Name: "test-host-path",
+				VolumeSource: corev1.VolumeSource{
+					HostPath: &corev1.HostPathVolumeSource{
+						Path: "/opt/config/test-host-path",
+						Type: newHostPathType(corev1.HostPathDirectoryOrCreate),
+					},
+				},
+			},
+			{
+				Name: "test-host-path-ro",
+				VolumeSource: corev1.VolumeSource{
+					HostPath: &corev1.HostPathVolumeSource{
+						Path: "/opt/config/test-host-path-ro",
+						Type: newHostPathType(corev1.HostPathDirectoryOrCreate),
 					},
 				},
 			},
@@ -846,4 +873,69 @@ func getDriverVolumes() []corev1.Volume {
 			},
 		},
 	}
+}
+
+func TestDriverVGPULicensing(t *testing.T) {
+	const (
+		testName = "driver-vgpu-licensing"
+	)
+
+	state, err := NewStateDriver(nil, nil, manifestDir)
+	require.Nil(t, err)
+	stateDriver, ok := state.(*stateDriver)
+	require.True(t, ok)
+
+	renderData := getMinimalDriverRenderData()
+
+	renderData.AdditionalConfigs = &additionalConfigs{
+		VolumeMounts: []corev1.VolumeMount{
+			{
+				Name:      "licensing-config",
+				MountPath: "/drivers/gridd.conf",
+				SubPath:   "gridd.conf",
+			},
+			{
+				Name:      "licensing-config",
+				MountPath: "/drivers/ClientConfigToken/client_configuration_token.tok",
+				SubPath:   "client_configuration_token.tok",
+			},
+		},
+		Volumes: []corev1.Volume{
+			{
+				Name: "licensing-config",
+				VolumeSource: corev1.VolumeSource{
+					ConfigMap: &corev1.ConfigMapVolumeSource{
+						LocalObjectReference: corev1.LocalObjectReference{
+							Name: "licensing-config-configmap",
+						},
+						Items: []corev1.KeyToPath{
+							{
+								Key:  "gridd.conf",
+								Path: "gridd.conf",
+							},
+							{
+								Key:  "client_configuration_token.tok",
+								Path: "client_configuration_token.tok",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	objs, err := stateDriver.renderer.RenderObjects(
+		&render.TemplatingData{
+			Data: renderData,
+		})
+	require.Nil(t, err)
+
+	actual, err := getYAMLString(objs)
+	require.Nil(t, err)
+
+	o, err := os.ReadFile(filepath.Join(manifestResultDir, testName+".yaml"))
+	require.Nil(t, err)
+
+	require.Equal(t, string(o), actual)
+
 }
