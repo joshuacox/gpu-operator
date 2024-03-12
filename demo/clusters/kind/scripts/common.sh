@@ -25,7 +25,7 @@ function from_versions_mk() {
     local value=$(grep -E "^\s*${makevar}\s+[\?:]= " ${PROJECT_DIR}/versions.mk)
     echo ${value##*= }
 }
-CLUSTER_NAME=$(from_versions_mk "CLUSTER_NAME")
+CLUSTER_NAME=gpu-operator-demo
 
 # The kubernetes tag to build the kind cluster from
 # From https://github.com/kubernetes/kubernetes/tags
@@ -41,4 +41,3 @@ CLUSTER_NAME=$(from_versions_mk "CLUSTER_NAME")
 : ${KIND_IMAGE_BASE_TAG:="v20230515-01914134-containerd_v1.7.1"}
 : ${KIND_IMAGE_BASE:="gcr.io/k8s-staging-kind/base:${KIND_IMAGE_BASE_TAG}"}
 : ${KIND_IMAGE:="kindest/node:${KIND_K8S_TAG}-${KIND_IMAGE_BASE_TAG}"}
-
