@@ -42,7 +42,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	nodev1 "k8s.io/api/node/v1"
 	nodev1beta1 "k8s.io/api/node/v1beta1"
-	policyv1beta1 "k8s.io/api/policy/v1beta1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -677,22 +676,23 @@ func kernelFullVersion(n ClusterPolicyController) (string, string, string) {
 func preProcessDaemonSet(obj *appsv1.DaemonSet, n ClusterPolicyController) error {
 	logger := n.rec.Log.WithValues("Daemonset", obj.Name)
 	transformations := map[string]func(*appsv1.DaemonSet, *gpuv1.ClusterPolicySpec, ClusterPolicyController) error{
-		"nvidia-driver-daemonset":                TransformDriver,
-		"nvidia-vgpu-manager-daemonset":          TransformVGPUManager,
-		"nvidia-vgpu-device-manager":             TransformVGPUDeviceManager,
-		"nvidia-vfio-manager":                    TransformVFIOManager,
-		"nvidia-container-toolkit-daemonset":     TransformToolkit,
-		"nvidia-device-plugin-daemonset":         TransformDevicePlugin,
-		"nvidia-sandbox-device-plugin-daemonset": TransformSandboxDevicePlugin,
-		"nvidia-dcgm":                            TransformDCGM,
-		"nvidia-dcgm-exporter":                   TransformDCGMExporter,
-		"nvidia-node-status-exporter":            TransformNodeStatusExporter,
-		"gpu-feature-discovery":                  TransformGPUDiscoveryPlugin,
-		"nvidia-mig-manager":                     TransformMIGManager,
-		"nvidia-operator-validator":              TransformValidator,
-		"nvidia-sandbox-validator":               TransformSandboxValidator,
-		"nvidia-kata-manager":                    TransformKataManager,
-		"nvidia-cc-manager":                      TransformCCManager,
+		"nvidia-driver-daemonset":                 TransformDriver,
+		"nvidia-vgpu-manager-daemonset":           TransformVGPUManager,
+		"nvidia-vgpu-device-manager":              TransformVGPUDeviceManager,
+		"nvidia-vfio-manager":                     TransformVFIOManager,
+		"nvidia-container-toolkit-daemonset":      TransformToolkit,
+		"nvidia-device-plugin-daemonset":          TransformDevicePlugin,
+		"nvidia-device-plugin-mps-control-daemon": TransformMPSControlDaemon,
+		"nvidia-sandbox-device-plugin-daemonset":  TransformSandboxDevicePlugin,
+		"nvidia-dcgm":                             TransformDCGM,
+		"nvidia-dcgm-exporter":                    TransformDCGMExporter,
+		"nvidia-node-status-exporter":             TransformNodeStatusExporter,
+		"gpu-feature-discovery":                   TransformGPUDiscoveryPlugin,
+		"nvidia-mig-manager":                      TransformMIGManager,
+		"nvidia-operator-validator":               TransformValidator,
+		"nvidia-sandbox-validator":                TransformSandboxValidator,
+		"nvidia-kata-manager":                     TransformKataManager,
+		"nvidia-cc-manager":                       TransformCCManager,
 	}
 
 	t, ok := transformations[obj.Name]
@@ -1280,6 +1280,71 @@ func TransformDevicePlugin(obj *appsv1.DaemonSet, config *gpuv1.ClusterPolicySpe
 			setContainerEnv(&(obj.Spec.Template.Spec.Containers[0]), NvidiaCTKPathEnvName, filepath.Join(config.Toolkit.InstallDir, "toolkit/nvidia-ctk"))
 		}
 	}
+
+	return nil
+}
+
+func TransformMPSControlDaemon(obj *appsv1.DaemonSet, config *gpuv1.ClusterPolicySpec, n ClusterPolicyController) error {
+	// update validation container
+	err := transformValidationInitContainer(obj, config)
+	if err != nil {
+		return err
+	}
+
+	image, err := gpuv1.ImagePath(&config.DevicePlugin)
+	if err != nil {
+		return err
+	}
+	imagePullPolicy := gpuv1.ImagePullPolicy(config.DevicePlugin.ImagePullPolicy)
+
+	// update image path and imagePullPolicy for 'mps-control-daemon-mounts' initContainer
+	for i, initCtr := range obj.Spec.Template.Spec.InitContainers {
+		if initCtr.Name == "mps-control-daemon-mounts" {
+			obj.Spec.Template.Spec.InitContainers[i].Image = image
+			obj.Spec.Template.Spec.InitContainers[i].ImagePullPolicy = imagePullPolicy
+			break
+		}
+	}
+
+	// update image path and imagePullPolicy for main container
+	var mainContainer *corev1.Container
+	for i, ctr := range obj.Spec.Template.Spec.Containers {
+		if ctr.Name == "mps-control-daemon-ctr" {
+			mainContainer = &obj.Spec.Template.Spec.Containers[i]
+			break
+		}
+	}
+	if mainContainer == nil {
+		return fmt.Errorf("failed to find main container 'mps-control-daemon-ctr'")
+	}
+	mainContainer.Image = image
+	mainContainer.ImagePullPolicy = imagePullPolicy
+
+	// set image pull secrets
+	if len(config.DevicePlugin.ImagePullSecrets) > 0 {
+		addPullSecrets(&obj.Spec.Template.Spec, config.DevicePlugin.ImagePullSecrets)
+	}
+
+	// set resource limits
+	if config.DevicePlugin.Resources != nil {
+		// apply resource limits to all containers
+		for i := range obj.Spec.Template.Spec.Containers {
+			obj.Spec.Template.Spec.Containers[i].Resources.Requests = config.DevicePlugin.Resources.Requests
+			obj.Spec.Template.Spec.Containers[i].Resources.Limits = config.DevicePlugin.Resources.Limits
+		}
+	}
+
+	// apply plugin configuration through ConfigMap if one is provided
+	err = handleDevicePluginConfig(obj, config)
+	if err != nil {
+		return nil
+	}
+
+	// set RuntimeClass for supported runtimes
+	setRuntimeClass(&obj.Spec.Template.Spec, n.runtime, config.Operator.RuntimeClass)
+
+	// update env required for MIG support
+	applyMIGConfiguration(mainContainer, config.MIG.Strategy)
 
 	return nil
 }
@@ -2296,7 +2361,12 @@ func handleDevicePluginConfig(obj *appsv1.DaemonSet, config *gpuv1.ClusterPolicy
 	// Apply custom configuration provided through ConfigMap
 	// setup env for main container
 	for i, container := range obj.Spec.Template.Spec.Containers {
-		if container.Name != "nvidia-device-plugin" && container.Name != "gpu-feature-discovery" {
+		switch container.Name {
+		case "nvidia-device-plugin":
+		case "gpu-feature-discovery":
+		case "mps-control-daemon-ctr":
+		default:
+			// skip if not the main container
 			continue
 		}
 		setContainerEnv(&obj.Spec.Template.Spec.Containers[i], "CONFIG_FILE", "/config/config.yaml")
@@ -3273,20 +3343,6 @@ func transformValidationInitContainer(obj *appsv1.DaemonSet, config *gpuv1.Clust
 		if !strings.Contains(initContainer.Name, "validation") {
 			continue
 		}
-		if strings.Contains(initContainer.Name, "mofed-validation") {
-			if config.Driver.GPUDirectRDMA == nil || !config.Driver.GPUDirectRDMA.IsEnabled() {
-				// remove mofed-validation init container from driver Daemonset if RDMA is not enabled
-				obj.Spec.Template.Spec.InitContainers = append(obj.Spec.Template.Spec.InitContainers[:i], obj.Spec.Template.Spec.InitContainers[i+1:]...)
-				continue
-			} else {
-				// pass env for mofed-validation
-				setContainerEnv(&(obj.Spec.Template.Spec.InitContainers[i]), GPUDirectRDMAEnabledEnvName, "true")
-				if config.Driver.GPUDirectRDMA.UseHostMOFED != nil && *config.Driver.GPUDirectRDMA.UseHostMOFED {
-					// set env indicating host-mofed is enabled
-					setContainerEnv(&(obj.Spec.Template.Spec.InitContainers[i]), UseHostMOFEDEnvName, "true")
-				}
-			}
-		}
 
 		// TODO: refactor the component-specific validation logic so that we are not duplicating TransformValidatorComponent()
 		// Pass env for driver-validation init container
@@ -3590,42 +3646,6 @@ func ocpHasDriverToolkitImageStream(n *ClusterPolicyController) (bool, error) {
 	return true, nil
 }
 
-// serviceAccountHasDockerCfg returns True if obj ServiceAccount
-// exists and has its builder-dockercfg secret reference populated.
-//
-// With OpenShift DriverToolkit, we need to ensure that this secret is
-// populated, otherwise, the Pod won't have the credentials to access
-// the DriverToolkit image in the cluster registry.
-func serviceAccountHasDockerCfg(obj *corev1.ServiceAccount, n ClusterPolicyController) (bool, error) {
-	ctx := n.ctx
-	logger := n.rec.Log.WithValues("ServiceAccount", obj.Name)
-
-	err := n.rec.Client.Get(ctx, types.NamespacedName{Namespace: n.operatorNamespace, Name: obj.Name}, obj)
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			logger.Info("ServiceAccount not found",
-				"Namespace", n.operatorNamespace, "err", err)
-			return false, nil
-		}
-
-		logger.Info("Couldn't get the ServiceAccount",
-			"Name", obj.Name,
-			"Error", err)
-
-		return false, err
-	}
-
-	for _, secret := range obj.Secrets {
-		if strings.HasPrefix(secret.Name, obj.Name+"-dockercfg-") {
-			return true, nil
-		}
-	}
-
-	logger.Info("ServiceAccount doesn't have dockercfg secret", "Name", obj.Name)
-
-	return false, nil
-}
-
 func (n ClusterPolicyController) cleanupAllDriverDaemonSets(ctx context.Context) error {
 	// Get all DaemonSets owned by ClusterPolicy
 	//
@@ -3739,17 +3759,6 @@ func (n ClusterPolicyController) ocpDriverToolkitDaemonSets(ctx context.Context)
 	err := n.ocpCleanupStaleDriverToolkitDaemonSets(ctx)
 	if err != nil {
 		return gpuv1.NotReady, err
-	}
-
-	state := n.idx
-	saObj := n.resources[state].ServiceAccount.DeepCopy()
-	saReady, err := serviceAccountHasDockerCfg(saObj, n)
-	if err != nil {
-		return gpuv1.NotReady, err
-	}
-	if !saReady {
-		n.rec.Log.Info("Driver ServiceAccount not ready, cannot create DriverToolkit DaemonSet")
-		return gpuv1.NotReady, nil
 	}
 
 	n.rec.Log.V(1).Info("preparing DriverToolkit DaemonSet",
@@ -4296,54 +4305,6 @@ func SecurityContextConstraints(n ClusterPolicyController) (gpuv1.State, error) 
 	}
 
 	found := &secv1.SecurityContextConstraints{}
-	err := n.rec.Client.Get(ctx, types.NamespacedName{Namespace: "", Name: obj.Name}, found)
-	if err != nil && apierrors.IsNotFound(err) {
-		logger.Info("Not found, creating...")
-		err = n.rec.Client.Create(ctx, obj)
-		if err != nil {
-			logger.Info("Couldn't create", "Error", err)
-			return gpuv1.NotReady, err
-		}
-		return gpuv1.Ready, nil
-	} else if err != nil {
-		return gpuv1.NotReady, err
-	}
-
-	logger.Info("Found Resource, updating...")
-	obj.ResourceVersion = found.ResourceVersion
-
-	err = n.rec.Client.Update(ctx, obj)
-	if err != nil {
-		logger.Info("Couldn't update", "Error", err)
-		return gpuv1.NotReady, err
-	}
-	return gpuv1.Ready, nil
-}
-
-// PodSecurityPolicy creates PSP resources
-func PodSecurityPolicy(n ClusterPolicyController) (gpuv1.State, error) {
-	ctx := n.ctx
-	state := n.idx
-	obj := n.resources[state].PodSecurityPolicy.DeepCopy()
-	obj.Namespace = n.operatorNamespace
-
-	logger := n.rec.Log.WithValues("PodSecurityPolicies", obj.Name)
-
-	// Check if PSP is disabled and cleanup resource if exists
-	if !n.singleton.Spec.PSP.IsEnabled() {
-		err := n.rec.Client.Delete(ctx, obj)
-		if err != nil && !apierrors.IsNotFound(err) {
-			logger.Info("Couldn't delete", "Error", err)
-			return gpuv1.NotReady, err
-		}
-		return gpuv1.Ready, nil
-	}
-
-	if err := controllerutil.SetControllerReference(n.singleton, obj, n.rec.Scheme); err != nil {
-		return gpuv1.NotReady, err
-	}
-
-	found := &policyv1beta1.PodSecurityPolicy{}
 	err := n.rec.Client.Get(ctx, types.NamespacedName{Namespace: "", Name: obj.Name}, found)
 	if err != nil && apierrors.IsNotFound(err) {
 		logger.Info("Not found, creating...")

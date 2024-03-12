@@ -798,6 +798,7 @@ func (n *ClusterPolicyController) init(ctx context.Context, reconciler *ClusterP
 		addState(n, "/opt/gpu-operator/state-container-toolkit")
 		addState(n, "/opt/gpu-operator/state-operator-validation")
 		addState(n, "/opt/gpu-operator/state-device-plugin")
+		addState(n, "/opt/gpu-operator/state-mps-control-daemon")
 		addState(n, "/opt/gpu-operator/state-dcgm")
 		addState(n, "/opt/gpu-operator/state-dcgm-exporter")
 		addState(n, "/opt/gpu-operator/gpu-feature-discovery")
@@ -846,8 +847,7 @@ func (n *ClusterPolicyController) init(ctx context.Context, reconciler *ClusterP
 		n.operatorMetrics.openshiftDriverToolkitEnabled.Set(openshiftDriverToolkitDisabled)
 	}
 
-	// retain PSP check for backward compatibility
-	if clusterPolicy.Spec.PSP.IsEnabled() || clusterPolicy.Spec.PSA.IsEnabled() {
+	if clusterPolicy.Spec.PSA.IsEnabled() {
 		// label namespace with Pod Security Admission levels
 		n.rec.Log.Info("Pod Security is enabled. Adding labels to GPU Operator namespace", "namespace", n.operatorNamespace)
 		err := n.setPodSecurityLabelsForNamespace()
@@ -1000,6 +1000,8 @@ func (n ClusterPolicyController) isStateEnabled(stateName string) bool {
 	case "state-container-toolkit":
 		return clusterPolicySpec.Toolkit.IsEnabled()
 	case "state-device-plugin":
+		return clusterPolicySpec.DevicePlugin.IsEnabled()
+	case "state-mps-control-daemon":
 		return clusterPolicySpec.DevicePlugin.IsEnabled()
 	case "state-dcgm":
 		return clusterPolicySpec.DCGM.IsEnabled()

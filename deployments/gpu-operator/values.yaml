@@ -9,10 +9,6 @@ nfd:
   enabled: true
   nodefeaturerules: false
 
-# deprecated: use PodSecurityAdmission (PSA) controls instead
-psp:
-  enabled: false
-
 psa:
   enabled: false
 
@@ -135,7 +131,7 @@ driver:
   usePrecompiled: false
   repository: nvcr.io/nvidia
   image: driver
-  version: "535.154.05"
+  version: "550.54.14"
   imagePullPolicy: IfNotPresent
   imagePullSecrets: []
   startupProbe:
@@ -183,6 +179,8 @@ driver:
   manager:
     image: k8s-driver-manager
     repository: nvcr.io/nvidia/cloud-native
+    # When choosing a different version of k8s-driver-manager, DO NOT downgrade to a version lower than v0.6.4
+    # to ensure k8s-driver-manager stays compatible with gpu-operator starting from v24.3.0
     version: v0.6.5
     imagePullPolicy: IfNotPresent
     env:
@@ -232,7 +230,7 @@ devicePlugin:
   enabled: true
   repository: nvcr.io/nvidia
   image: k8s-device-plugin
-  version: v0.14.5-ubi8
+  version: v0.15.0-rc.1-ubi8
   imagePullPolicy: IfNotPresent
   imagePullSecrets: []
   args: []
@@ -323,8 +321,8 @@ dcgmExporter:
 gfd:
   enabled: true
   repository: nvcr.io/nvidia
-  image: gpu-feature-discovery
-  version: v0.8.2-ubi8
+  image: k8s-device-plugin
+  version: v0.15.0-rc.1-ubi8
   imagePullPolicy: IfNotPresent
   imagePullSecrets: []
   env:
@@ -393,6 +391,8 @@ vgpuManager:
   driverManager:
     image: k8s-driver-manager
     repository: nvcr.io/nvidia/cloud-native
+    # When choosing a different version of k8s-driver-manager, DO NOT downgrade to a version lower than v0.6.4
+    # to ensure k8s-driver-manager stays compatible with gpu-operator starting from v24.3.0
     version: v0.6.4
     imagePullPolicy: IfNotPresent
     env:
@@ -425,7 +425,9 @@ vfioManager:
   driverManager:
     image: k8s-driver-manager
     repository: nvcr.io/nvidia/cloud-native
-    version: v0.6.2
+    # When choosing a different version of k8s-driver-manager, DO NOT downgrade to a version lower than v0.6.4
+    # to ensure k8s-driver-manager stays compatible with gpu-operator starting from v24.3.0
+    version: v0.6.5
     imagePullPolicy: IfNotPresent
     env:
       - name: ENABLE_GPU_POD_EVICTION
